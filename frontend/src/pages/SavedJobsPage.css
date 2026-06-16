@@ -1,0 +1,11 @@
+.saved-jobs-page {
+  padding-top: 120px;
+  padding-bottom: 80px;
+}
+
+.saved-jobs-title {
+  font-family: var(--font-heading);
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 32px;
+}
