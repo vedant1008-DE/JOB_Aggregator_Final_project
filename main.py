@@ -1,13 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from database import supabase
 from auth import create_token, get_current_user, verify_password, hash_password
 from models import RegisterUser, LoginUser, JobsInput, SavedJob, AlertPreference, SearchJob, SourceInput
 from apscheduler.schedulers.background import BackgroundScheduler
 from scrapers.main import main as run_scraper
+from ai_service import extract_text_from_pdf, analyze_resume, get_rag_response, user_resumes, user_chat_history
 
 app = FastAPI()
 scheduler = None
+
+class ChatMessage(BaseModel):
+    message: str
 
 app.add_middleware(
     CORSMiddleware,
@@ -286,3 +291,85 @@ def get_alerts(user_id: int = Depends(get_current_user)):
 def delete_alert(alert_id: int, user_id: int = Depends(get_current_user)):
     deleted = (supabase.table("alert_preferences").delete().eq("user_id", user_id).eq("id", alert_id).execute())
     return {"message": "Alert preference deleted successfully"}
+
+
+@app.post("/upload-resume")
+async def upload_resume(file: UploadFile = File(...), user_id: int = Depends(get_current_user)):
+    """Upload and analyze a resume file."""
+    try:
+        contents = await file.read()
+        
+        # Extract text based on file type
+        if file.filename.endswith('.pdf'):
+            resume_text = extract_text_from_pdf(contents)
+        else:
+            # For other files, try to decode as text
+            try:
+                resume_text = contents.decode('utf-8')
+            except:
+                resume_text = str(contents)
+        
+        if not resume_text or len(resume_text.strip()) < 50:
+            raise HTTPException(status_code=400, detail="Could not extract text from the file. Please upload a valid resume.")
+        
+        # Analyze the resume
+        analysis = analyze_resume(resume_text)
+        analysis['resume_summary'] = resume_text[:1000]  # Store for chat context
+        
+        # Save to in-memory storage
+        user_resumes[user_id] = analysis
+        
+        return {
+            "message": "Resume uploaded and analyzed successfully",
+            "analysis": analysis
+        }
+        
+    except Exception as e:
+        print(f"Error processing resume: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process resume: {str(e)}")
+
+
+@app.get("/resume-analysis")
+def get_resume_analysis(user_id: int = Depends(get_current_user)):
+    """Get the user's stored resume analysis."""
+    analysis = user_resumes.get(user_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="No resume uploaded yet")
+    return analysis
+
+
+@app.post("/chat")
+def chat_with_ai(chat_msg: ChatMessage, user_id: int = Depends(get_current_user)):
+    """Chat with AI about jobs and resume."""
+    # Get user's saved jobs for context
+    jobs = []
+    try:
+        saved_jobs = supabase.table("saved_jobs").select("*, jobs(*)").eq("user_id", user_id).execute()
+        if saved_jobs.data:
+            jobs = [sj["jobs"] for sj in saved_jobs.data if sj.get("jobs")]
+    except Exception as e:
+        print(f"Error fetching jobs for chat: {e}")
+    
+    # Get response
+    response = get_rag_response(user_id, chat_msg.message, jobs)
+    
+    # Save chat history
+    if user_id not in user_chat_history:
+        user_chat_history[user_id] = []
+    
+    user_chat_history[user_id].append({
+        "role": "user",
+        "message": chat_msg.message
+    })
+    user_chat_history[user_id].append({
+        "role": "ai",
+        "message": response
+    })
+    
+    return {"response": response}
+
+
+@app.get("/chat-history")
+def get_chat_history(user_id: int = Depends(get_current_user)):
+    """Get chat history for user."""
+    return {"history": user_chat_history.get(user_id, [])}

@@ -2,14 +2,17 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function getHeaders() {
   const token = localStorage.getItem('token');
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = {};
+  if (includeContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return headers;
 }
 
 async function request(endpoint, options = {}) {
   const res = await fetch(`${BASE_URL}${endpoint}`, {
-    headers: getHeaders(),
+    headers: getHeaders(true),
     ...options,
   });
 
@@ -97,4 +100,43 @@ export function fetchSources() {
 
 export function fetchLocations() {
   return request('/locations');
+}
+
+export function uploadResume(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  return fetch(`${BASE_URL}/upload-resume`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('token')}`
+    },
+    body: formData,
+  }).then(async res => {
+    if (res.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+      throw new Error('Unauthorized');
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || 'Something went wrong');
+    }
+    return data;
+  });
+}
+
+export function getResumeAnalysis() {
+  return request('/resume-analysis');
+}
+
+export function sendChatMessage(message) {
+  return request('/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  });
+}
+
+export function getChatHistory() {
+  return request('/chat-history');
 }

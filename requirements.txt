@@ -13,4 +13,11 @@ httpx
 lxml
 requests
 resend
-apscheduler
+apscheduler
+langchain
+langchain-community
+sentence-transformers
+faiss-cpu
+openai
+pymupdf
+python-multipart

@@ -9,6 +9,7 @@ import {
   MdAutorenew
 } from 'react-icons/md';
 import { IoIosPaperPlane } from 'react-icons/io';
+import { uploadResume, sendChatMessage, getChatHistory, getResumeAnalysis } from '../services/api';
 import './ResumePage.css';
 
 
@@ -18,84 +19,118 @@ function ResumePage() {
     {
       id: 1,
       sender: 'ai',
-      text: 'Hello! I am your AI Job Assistant. Upload your resume on the right, and I will recommend matching jobs and help you optimize your profile.'
-    },
-    {
-      id: 2,
-      sender: 'user',
-      text: 'Can you recommend some web developer jobs?'
-    },
-    {
-      id: 3,
-      sender: 'ai',
-      text: 'I found a few matches based on web development:\n\n1. Full Stack Developer (React/Node) at TechCorp (Match: 87%)\n2. Frontend Engineer at WebFlow (Match: 79%)\n\nUpload your resume on the right to see direct matching scores and get personalized suggestions!'
+      text: 'Hello! I am your AI Job Assistant. Upload your resume, and I will recommend matching jobs and help you optimize your profile.'
     }
   ]);
   const [inputVal, setInputVal] = useState('');
   const [isLaunching, setIsLaunching] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   // Upload/Analysis state
   const [file, setFile] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [analysisData, setAnalysisData] = useState(null);
   const [dashOffset, setDashOffset] = useState(251.2); // Full circle offset for score circle animation
+
+  // Load existing chat and analysis on mount
+  useEffect(() => {
+    const loadInitialData = async () => {
+      try {
+        // Load existing resume analysis
+        const analysis = await getResumeAnalysis();
+        setAnalysisData(analysis);
+        setShowAnalysis(true);
+        setDashOffset(251.2 * (1 - analysis.score / 100));
+      } catch (e) {
+        // No resume uploaded yet, that's okay
+      }
+      
+      try {
+        // Load chat history
+        const history = await getChatHistory();
+        if (history.history && history.history.length > 0) {
+          const formattedHistory = history.history.map((msg, idx) => ({
+            id: idx + 1,
+            sender: msg.role,
+            text: msg.message
+          }));
+          setMessages([
+            { id: 0, sender: 'ai', text: 'Hello! I am your AI Job Assistant. Upload your resume, and I will recommend matching jobs and help you optimize your profile.' },
+            ...formattedHistory
+          ]);
+        }
+      } catch (e) {
+        // No chat history yet
+      }
+    };
+    loadInitialData();
+  }, []);
 
   // Animate circular progress when analysis is shown
   useEffect(() => {
-    if (showAnalysis) {
+    if (showAnalysis && analysisData) {
       const timer = setTimeout(() => {
-        setDashOffset(251.2 * (1 - 0.87));
+        setDashOffset(251.2 * (1 - analysisData.score / 100));
       }, 100);
       return () => clearTimeout(timer);
     } else {
       setDashOffset(251.2);
     }
-  }, [showAnalysis]);
+  }, [showAnalysis, analysisData]);
 
-  function handleSendMessage(e) {
+  async function handleSendMessage(e) {
     e.preventDefault();
-    if (!inputVal.trim() || isLaunching) return;
+    if (!inputVal.trim() || isLaunching || isSending) return;
 
-    setIsLaunching(true);
-    setTimeout(() => {
-      setIsLaunching(false);
-    }, 850); // Flight & return duration
-
-    const newMsg = {
+    const userMessage = inputVal.trim();
+    setInputVal('');
+    
+    const newUserMsg = {
       id: Date.now(),
       sender: 'user',
-      text: inputVal
+      text: userMessage
     };
+    setMessages(prev => [...prev, newUserMsg]);
 
-    setMessages(prev => [...prev, newMsg]);
-    setInputVal('');
-
-    // Simulated AI response
+    setIsLaunching(true);
+    setIsSending(true);
     setTimeout(() => {
+      setIsLaunching(false);
+    }, 850);
+
+    try {
+      const response = await sendChatMessage(userMessage);
       const aiReply = {
         id: Date.now() + 1,
         sender: 'ai',
-        text: showAnalysis 
-          ? "Based on your uploaded resume, you have strong matches in Javascript and Python. I suggest tailoring your resume's experience section to highlight your API integration work to boost scores further."
-          : "Once you upload your resume on the right, I can scan your exact skills and compare them with our active database of jobs to give you targeted recommendations."
+        text: response.response
       };
       setMessages(prev => [...prev, aiReply]);
-    }, 1000);
+    } catch (error) {
+      toast.error(error.message || 'Failed to send message');
+    } finally {
+      setIsSending(false);
+    }
   }
 
-  function handleFileChange(e) {
+  async function handleFileChange(e) {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
       setAnalyzing(true);
       setShowAnalysis(false);
 
-      // Simulate parsing & scoring
-      setTimeout(() => {
+      try {
+        const result = await uploadResume(selectedFile);
+        setAnalysisData(result.analysis);
         setAnalyzing(false);
         setShowAnalysis(true);
         toast.success('Resume analyzed successfully!');
-      }, 2000);
+      } catch (error) {
+        setAnalyzing(false);
+        toast.error(error.message || 'Failed to analyze resume');
+      }
     }
   }
 
@@ -133,12 +168,12 @@ function ResumePage() {
           )}
 
           {/* Analysis Results */}
-          {showAnalysis && !analyzing && (
+          {showAnalysis && !analyzing && analysisData && (
             <div className="analysis-results-card">
               <div className="analysis-header">
                 <div className="analysis-header-info">
                   <h3>Analysis Complete</h3>
-                  <p>Matches evaluated against 125 active job listings</p>
+                  <p>Matches evaluated against active job listings</p>
                 </div>
                 
                 {/* Score Circle */}
@@ -159,38 +194,40 @@ function ResumePage() {
                       style={{ strokeDashoffset: dashOffset }}
                     />
                   </svg>
-                  <span className="score-text">87%</span>
+                  <span className="score-text">{analysisData.score}%</span>
                 </div>
               </div>
 
               {/* Skills Matches */}
-              <div className="analysis-skills-section">
-                <span className="skills-title">Matched Skills</span>
-                <div className="skills-grid">
-                  <span className="skills-badge match"><MdCheckCircle /> Python</span>
-                  <span className="skills-badge match"><MdCheckCircle /> React.js</span>
-                  <span className="skills-badge match"><MdCheckCircle /> FastAPI</span>
-                  <span className="skills-badge match"><MdCheckCircle /> SQL</span>
-                  <span className="skills-badge match"><MdCheckCircle /> Git</span>
+              {analysisData.matched_skills && analysisData.matched_skills.length > 0 && (
+                <div className="analysis-skills-section">
+                  <span className="skills-title">Matched Skills</span>
+                  <div className="skills-grid">
+                    {analysisData.matched_skills.map((skill, idx) => (
+                      <span key={idx} className="skills-badge match"><MdCheckCircle /> {skill}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Missing Skills */}
-              <div className="analysis-skills-section">
-                <span className="skills-title">Missing / Demanded Skills</span>
-                <div className="skills-grid">
-                  <span className="skills-badge missing"><MdCancel /> Docker</span>
-                  <span className="skills-badge missing"><MdCancel /> AWS (EC2/S3)</span>
-                  <span className="skills-badge missing"><MdCancel /> CI/CD</span>
+              {analysisData.missing_skills && analysisData.missing_skills.length > 0 && (
+                <div className="analysis-skills-section">
+                  <span className="skills-title">Missing / Demanded Skills</span>
+                  <div className="skills-grid">
+                    {analysisData.missing_skills.map((skill, idx) => (
+                      <span key={idx} className="skills-badge missing"><MdCancel /> {skill}</span>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* AI Feedback */}
               <div className="analysis-skills-section">
                 <span className="skills-title">AI Optimization Recommendation</span>
                 <div className="analysis-feedback-section">
                   <p className="analysis-feedback-text">
-                    Your profile has a solid foundation in web frameworks. To qualify for senior developer roles in the current market, consider adding containerization (Docker) and cloud deployments (AWS) to your resume.
+                    {analysisData.feedback}
                   </p>
                 </div>
               </div>
